@@ -25,12 +25,16 @@ function countSharedKeywords(a: Set<string>, b: Set<string>): number {
 }
 
 function buildBriefing(descriptions: (string | undefined)[], fallback: string): string {
-  const text = descriptions.filter(Boolean).slice(0, 3).join(' — ')
-  if (!text) return fallback
-  if (text.length <= 400) return text
-  const truncated = text.slice(0, 400)
-  const lastSpace = truncated.lastIndexOf(' ')
-  return truncated.slice(0, lastSpace) + '...'
+  const sentences: string[] = []
+  for (const desc of descriptions) {
+    if (!desc) continue
+    const first = desc.split('. ')[0].trim()
+    if (first.length >= 40 && first.length <= 150 && first !== fallback) {
+      sentences.push(first)
+    }
+    if (sentences.length === 3) break
+  }
+  return sentences.length > 0 ? sentences.join(' ') : fallback
 }
 
 function topKeywords(keywordSets: Set<string>[]): string {
@@ -48,6 +52,7 @@ function topKeywords(keywordSets: Set<string>[]): string {
 export async function clusterArticlesByCategory(category: string): Promise<void> {
   const articles = await Article.find({ category })
     .select('title description url source _id')
+    .limit(100)
     .lean()
 
   if (articles.length < 3) return
@@ -71,7 +76,7 @@ export async function clusterArticlesByCategory(category: string): Promise<void>
 
     for (let j = 0; j < articles.length; j++) {
       if (clustered[j]) continue
-      if (countSharedKeywords(keywords[seed], keywords[j]) >= 2) {
+      if (countSharedKeywords(keywords[seed], keywords[j]) >= 1) {
         group.push(j)
         clustered[j] = true
       }
@@ -80,12 +85,36 @@ export async function clusterArticlesByCategory(category: string): Promise<void>
     clusters.push(group)
   }
 
+  for (let ci = clusters.length - 1; ci >= 0; ci--) {
+    if (clusters[ci].length >= 2) continue
+    const small = clusters[ci]
+    let bestClusterIdx = -1
+    let bestScore = 0
+    for (let li = 0; li < clusters.length; li++) {
+      if (li === ci) continue
+      const largeSeed = clusters[li][0]
+      let score = 0
+      for (const si of small) score += countSharedKeywords(keywords[largeSeed], keywords[si])
+      if (score > bestScore) {
+        bestScore = score
+        bestClusterIdx = li
+      }
+    }
+    if (bestClusterIdx !== -1) {
+      clusters[bestClusterIdx].push(...small)
+      clusters.splice(ci, 1)
+    }
+  }
+
   const newTopics = clusters.map((indices) => {
     const clusterArticles = indices.map((i) => articles[i])
     const clusterKeywords = indices.map((i) => keywords[i])
+    const raw = clusterArticles[0].title.replace(/[-|–].*$/, '').trim()
+    const lastSpace = raw.slice(0, 70).lastIndexOf(' ')
+    const name = raw.length <= 70 ? raw : (lastSpace > 0 ? raw.slice(0, lastSpace) : raw.slice(0, 70)) + '...'
 
     return {
-      name: topKeywords(clusterKeywords),
+      name,
       category,
       briefing: buildBriefing(clusterArticles.map((a) => a.description), topKeywords(clusterKeywords)),
       sources: clusterArticles.map((a) => ({ name: a.source, url: a.url, articleId: a._id })),

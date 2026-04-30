@@ -11,6 +11,7 @@ router.get('/', async (req: Request, res: Response) => {
 
     const filter: Record<string, unknown> = {}
     if (req.query.category) filter.category = req.query.category
+    ;(filter as any)['sources.1'] = { $exists: true }
 
     const [topics, totalCount] = await Promise.all([
       Topic.find(filter).sort({ createdAt: -1 }).skip((page - 1) * limit).limit(limit).lean(),
